@@ -1,0 +1,129 @@
+---
+title: "02_DA_cleaned_up"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Info
+
+Second step: Differential Analysis - data given to us will be used to perform this analysis. 
+
+## Getting Started
+
+Loading the required libraries.
+
+```{r, message=FALSE}
+#Main libraries
+library(readr)
+library(limma)
+
+#Support functions also requires
+library(ggplot2)
+library(reshape)
+library(pheatmap)
+library(gridExtra)
+library(grid)
+library(cowplot)
+library(ggrepel)
+library(hexbin)
+
+source("support_functions.R")
+
+setwd("C:/Users/20192234/Documents/TUe/BMT Y3/8QC00-Tcells")
+```
+
+### Import the normalised dataframe and experimental design
+```{r}
+setwd("C:/Users/20192234/Documents/TUe/BMT Y3/8QC00-Tcells/data_projectTcell")
+
+
+memory = TRUE
+
+if (memory == FALSE) {
+  #naive
+  
+  #Data
+  count_df_vsn <- as.data.frame(read_csv("../data_projectTcell/count_naive_df_vsn.csv"))
+  row.names(count_df_vsn) <- count_df_vsn[,1]
+  count_df_vsn <- count_df_vsn[,-1]
+  #Design
+  targets <- as.data.frame(read_csv("../support_project/targets_naive.csv"))
+  
+} else {
+  #memory
+  
+  #Data
+  count_df_vsn <- as.data.frame(read_csv("../data_projectTcell/count_memory_df_vsn.csv"))
+  row.names(count_df_vsn) <- count_df_vsn[,1]
+  count_df_vsn <- count_df_vsn[,-1]
+  #Design
+  targets <- as.data.frame(read_csv("../support_project/targets_memory.csv"))
+}
+
+```
+
+### LIMMA differential analysis
+```{r}
+#first check the conditions order
+unique(targets$condition)
+
+#we want to compare the different conditions with the Resting condition so we build a
+#comparison list
+comparisons <- list("Th0vsResting" = c(5,-3),
+                    "Th1vsResting" = c(7,-3),
+                    "Th2vsResting" = c(4,-3),
+                    "Th17vsResting" = c(2,-3),
+                    "iTregvsResting" = c(6,-3),
+                    "IFNBvsResting" = c(1,-3)) 
+#each vector of the list represent the contrasts, here we subtract the third condition (resting (-3)) from the rest
+
+#now that the comparisons are defined, we can run limma
+limmaRes <- runLimma(measurements = count_df_vsn, 
+                     targets = targets, 
+                     comparisons = comparisons)
+
+#once limma has run, we extract the statistics dataframe to summarise the
+#differential analysis
+ttop_Th0vsResting <- ttopFormatter(topTable(limmaRes[[1]], coef = 1, number = length(count_df_vsn[,1]), adjust.method = "fdr"))
+ttop_Th1vsResting <- ttopFormatter(topTable(limmaRes[[1]], coef = 2, number = length(count_df_vsn[,1]), adjust.method = "fdr"))
+ttop_Th2vsResting <- ttopFormatter(topTable(limmaRes[[1]], coef = 3, number = length(count_df_vsn[,1]), adjust.method = "fdr"))
+ttop_Th17vsResting <- ttopFormatter(topTable(limmaRes[[1]], coef = 4, number = length(count_df_vsn[,1]), adjust.method = "fdr"))
+ttop_iTregvsResting <- ttopFormatter(topTable(limmaRes[[1]], coef = 5, number = length(count_df_vsn[,1]), adjust.method = "fdr"))
+ttop_IFNBvsResting <- ttopFormatter(topTable(limmaRes[[1]], coef = 6, number = length(count_df_vsn[,1]), adjust.method = "fdr"))
+
+```
+
+### Write the DA output
+```{r}
+
+if (memory == FALSE) {
+  #naive
+  write_csv(ttop_Th0vsResting, "../00cleaned_up_files/results_cleaned_up/ttop_Th0vsResting_naive.csv")
+  write_csv(ttop_Th1vsResting, "../00cleaned_up_files/results_cleaned_up/ttop_Th1vsResting_naive.csv")
+  write_csv(ttop_Th2vsResting, "../00cleaned_up_files/results_cleaned_up/ttop_Th2vsResting_naive.csv")
+  write_csv(ttop_Th17vsResting, "../00cleaned_up_files/results_cleaned_up/ttop_Th17vsResting_naive.csv")
+  write_csv(ttop_iTregvsResting, "../00cleaned_up_files/results_cleaned_up/ttop_iTregvsResting_naive.csv")
+  write_csv(ttop_IFNBvsResting, "../00cleaned_up_files/results_cleaned_up/ttop_IFNBvsResting_naive.csv")
+  
+} else {
+  #memory
+  write_csv(ttop_Th0vsResting, "../00cleaned_up_files/results_cleaned_up/ttop_Th0vsResting_memory.csv")
+  write_csv(ttop_Th1vsResting, "../00cleaned_up_files/results_cleaned_up/ttop_Th1vsResting_memory.csv")
+  write_csv(ttop_Th2vsResting, "../00cleaned_up_files/results_cleaned_up/ttop_Th2vsResting_memory.csv")
+  write_csv(ttop_Th17vsResting, "../00cleaned_up_files/results_cleaned_up/ttop_Th17vsResting_memory.csv")
+  write_csv(ttop_iTregvsResting, "../00cleaned_up_files/results_cleaned_up/ttop_iTregvsResting_memory.csv")
+  write_csv(ttop_IFNBvsResting, "../00cleaned_up_files/results_cleaned_up/ttop_IFNBvsResting_memory.csv")
+}
+
+```
+
+## Session Info Details
+
+```{r, echo=FALSE, eval=TRUE}
+sessionInfo()
+```
+
+

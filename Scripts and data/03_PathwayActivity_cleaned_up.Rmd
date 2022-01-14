@@ -1,0 +1,245 @@
+---
+title: "03_PathwayActivity_cleaned_up"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Info
+
+Third step: estimate pathway activity from transcriptomics data using **PROGENy**. 
+
+## Getting Started
+
+Load the required libraries. 
+
+```{r libraries, message=FALSE}
+library(progeny)
+library(dorothea)
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(readr)
+library(pheatmap)
+
+#setwd("C:/Users/20192234/Documents/TUe/BMT Y3/8QC00-Tcells")
+#setwd("C:/Users/20182400/Documents/GitHub/8QC00-Tcells")
+
+
+```
+
+## Pathway activity with Progeny
+We read in the original data and results from step 2: 
++ Normalised transcriptomics data from (original data)
++ Differential expression analysis results (results step 2). 
+In this particular case, a top table results object from limma. 
+
+This data is needed to estimate the Pathway activity, for all conditions. 
+
+```{r loadInputAndRun, message=FALSE}
+
+setwd("C:/Users/20182400/Documents/GitHub/8QC00-Tcells")
+
+## We read the normalised counts and the experimental design
+
+memory = TRUE
+
+if (memory == TRUE){
+  #memory
+  x = c("Th0vsResting_memory.csv",
+      "Th1vsResting_memory.csv",
+      "Th2vsResting_memory.csv",
+      "Th17vsResting_memory.csv",
+      "iTregvsResting_memory.csv",
+      "IFNBvsResting_memory.csv")
+  Normalised_counts <- read_csv("C:/Users/20182400/Documents/GitHub/8QC00-Tcells/data_projectTcell/count_memory_df_vsn.csv") # /../data_projectTcell/count_memory_df_vsn.csv")
+  Experimental_design <- read_csv("C:/Users/20182400/Documents/GitHub/8QC00-Tcells/support_project/targets_memory.csv")
+} else if (memory == FALSE){
+  #naive
+  x = c("Th0vsResting_naive.csv",
+      "Th1vsResting_naive.csv",
+      "Th2vsResting_naive.csv",
+      "Th17vsResting_naive.csv",
+      "iTregvsResting_naive.csv",
+      "IFNBvsResting_naive.csv")
+  Normalised_counts <- read_csv("C:/Users/20182400/Documents/GitHub/8QC00-Tcells/data_projectTcell/count_naive_df_vsn.csv")
+  Experimental_design <- read_csv("C:/Users/20182400/Documents/GitHub/8QC00-Tcells/support_project/targets_naive.csv")
+}
+
+PathwayActivity_all_cond <- list()
+counter = 1
+
+for (i in x) {
+ 
+  ## We read the results from the differential analysis. 
+  ttop_filename = paste("ttop", i, sep="_")
+  ttop_filepath = "C:/Users/20182400/Documents/RStudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/"
+  ttop_ivsResting <- read_csv(paste(ttop_filepath, ttop_filename, sep=""))
+ 
+
+  # We have to slightly modify the format of the input files to make it suitable
+  # for running Progeny. 
+  Normalised_counts_matrix <- Normalised_counts %>% 
+      dplyr::mutate_if(~ any(is.na(.x)),~ if_else(is.na(.x),0,.x)) %>% 
+      tibble::column_to_rownames(var = "gene") %>% 
+      as.matrix()
+  
+  ttop_ivsResting_matrix <- ttop_ivsResting %>% 
+      dplyr::select(ID, t) %>% 
+      dplyr::filter(!is.na(t)) %>% 
+      column_to_rownames(var = "ID") %>%
+      as.matrix()
+
+  ##now we start with the actual progeny part: 
+
+  # We first compute Progeny scores for every sample (with the replicates) 
+  # using the normalised counts. 
+  # We will use the 250 most responsive genes per pathway, as Bulk RNA-seq data 
+  # is used and the number of responsive genes is suggested to be between 
+  # 200-500 in that case. 
+  
+  PathwayActivity_counts <- progeny(Normalised_counts_matrix, scale=TRUE, 
+      organism="Human", top = 250)
+  Activity_counts <- as.vector(PathwayActivity_counts)
+  
+  # Now, we run an enrichment analysis using a competitive permutation approach to 
+  # assess the significance of the pathway activity. 
+  # We end up with Normalised Enrichment Scores (NES) for each pathway.
+
+  PathwayActivity_zscore <- progeny(ttop_ivsResting_matrix, 
+      scale=TRUE, organism="Human", top = 250, perm = 10000, z_scores = TRUE) %>%
+      t()
+  colnames(PathwayActivity_zscore) <- "NES"
+
+  PathwayActivity_zscore_df <- as.data.frame(PathwayActivity_zscore) %>% 
+    rownames_to_column(var = "Pathway") %>%
+    dplyr::arrange(NES) %>%
+    dplyr::mutate(Pathway = factor(Pathway))
+
+  ggplot(PathwayActivity_zscore_df,aes(x = reorder(Pathway, NES), y = NES)) + 
+      geom_bar(aes(fill = NES), stat = "identity") +
+      scale_fill_gradient2(low = "darkblue", high = "indianred", 
+          mid = "whitesmoke", midpoint = 0) + 
+      theme_minimal() +
+      theme(axis.title = element_text(face = "bold", size = 12),
+          axis.text.x = 
+              element_text(angle = 45, hjust = 1, size =10, face= "bold"),
+          axis.text.y = element_text(size =10, face= "bold"),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank()) +
+      xlab("Pathways")
+
+  # Progeny results can be used as an optional input for CARNIVAL:
+  # CARNIVAL sets weights based on Progeny scores in each pathway-related node 
+  # in order to find more relevant solutions. 
+  # We therefore run Progeny again with slightly different parameters, 
+  # setting `z_scores = FALSE` so that Progeny returns pathway activity values 
+  # between 1 and -1, rather than converting to Z-Scores.
+  
+  PathwayActivity_CARNIVALinput <- progeny(ttop_ivsResting_matrix, 
+      scale=TRUE, organism="Human", top = 250, perm = 10000, z_scores = FALSE) %>%
+      t () %>% 
+      as.data.frame() %>% 
+      tibble::rownames_to_column(var = "Pathway") 
+  colnames(PathwayActivity_CARNIVALinput)[2] <- "score"
+  PathwayActivity_all_cond[[counter]] = PathwayActivity_CARNIVALinput
+  counter = counter+1
+  
+}
+```
+
+## Saving as .csv file
+
+Now we save the found Pathway Activity for all conditions as a .csv file in 
+which the different pathways can be found as the rows and the different conditions 
+as the columns. 
+
+```{r assembling df PA}
+#Pathway activities of all conditions are saved in PathwayActivity_all_cond
+#now, let's put it in a different format :) 
+
+conditions = c("Th0",
+      "Th1",
+      "Th2",
+      "Th17",
+      "iTreg",
+      "IFNB")
+
+PA_all_cond_matrix = as.data.frame(matrix())
+
+for (i in 1:length(x)) {
+  PA_cond_i = PathwayActivity_all_cond[[i]] %>%
+      as.data.frame()
+  PA_all_cond_column = as.data.frame(matrix(nrow = length(PA_cond_i[,1]), ncol = 2))
+
+  PA_all_cond_column[,1] = PA_cond_i[,1]
+  PA_all_cond_column[,2] = PA_cond_i[,2]
+  colnames(PA_all_cond_column) = c("Pathway",conditions[i])
+  
+  
+  if (i == 1) {
+    PA_all_cond_matrix = PA_all_cond_column  
+  } else {
+    PA_all_cond_matrix = merge(PA_all_cond_matrix, PA_all_cond_column, by="Pathway")  
+  }
+}
+
+
+#now PA_all_cond_matrix contains all info about the pathways for all conditions
+#rows: pathways; columns: conditions
+
+if (memory == TRUE) {
+  result_filename = paste("PathwayActivity_CARNIVALinput", "memory", sep = "_")
+} else {
+  result_filename = paste("PathwayActivity_CARNIVALinput", "naive", sep = "_")
+}
+result_filepath = "../00cleaned_up_files/results_cleaned_up/"
+
+write_csv(PA_all_cond_matrix, paste(result_filepath, result_filename, sep=""))
+
+
+# Enrichment analysis Pathway Activity
+
+#get results
+results_PA_memory <- read_csv("C:/Users/20182400/Documents/RStudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/PathwayActivity_CARNIVALinput_memory")
+results_PA_naive <- read_csv("C:/Users/20182400/Documents/RStudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/PathwayActivity_CARNIVALinput_naive")
+
+#make data frame
+NES_memory <- data.frame(results_PA_memory, row.names = 1)
+NES_naive <- data.frame(results_PA_naive, row.names = 1)
+
+#saving method pdf
+save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+
+#make heatmap naive and memory
+heatmap_memory <- pheatmap(NES_memory,fontsize=14, 
+           fontsize_row = 11, fontsize_col = 11, 
+           angle_col = 45, treeheight_col = 0, cellheight = 18, 
+           main = "Pathway activity of the memory cells")
+
+save_pheatmap_pdf(heatmap_memory, "C:/Users/20182400/Documents/RStudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/heatmap_memory.pdf")
+
+heatmap_naive <- pheatmap(NES_naive,fontsize=14, 
+           fontsize_row = 11, fontsize_col = 11,cellheight = 18, 
+           angle_col = 45, treeheight_col = 0, 
+           main = "Pathway activity of the naive cells")
+
+save_pheatmap_pdf(heatmap_naive, "C:/Users/20182400/Documents/RStudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/heatmap_naive.pdf")
+```
+
+## Session Info Details
+
+```{r sessionInfo, echo=FALSE, eval=TRUE}
+sessionInfo()
+```

@@ -1,0 +1,255 @@
+---
+title: "04_TFActivity_cleaned_up"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Info
+
+Fourth step: estimate transcription factor (TF) activity from transcriptomics
+data using **DoRothEA**.
+
+## Getting Started
+
+Load the required libraries and the support functions.
+
+```{r libraries, message=FALSE}
+library(progeny)
+library(dorothea)
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(readr)
+
+## For the volcano plot (related to support functions)
+library(ggrepel)
+
+## We also load the support functions
+source("support_functions.R")
+
+```
+
+## TF Activity with Dorothea
+
+First, we read the original data and the result from the previous steps: 
++ Normalised transcriptomics data from (original data)
++ Differential expression analysis results (step 2). 
+In this particular case, a top table results object from limma.
+
+Then the format is modified, and the TF activity can be estimated with the help
+of Dorothea. 
+
+```{r loadInput, message=FALSE}
+
+setwd("C:/Users/20192234/Documents/TUe/BMT Y3/8QC00-Tcells/data_projectTcell")
+
+memory = FALSE
+if (memory == TRUE){
+  #memory
+  x = c("Th0vsResting_memory.csv",
+      "Th1vsResting_memory.csv",
+      "Th2vsResting_memory.csv",
+      "Th17vsResting_memory.csv",
+      "iTregvsResting_memory.csv",
+      "IFNBvsResting_memory.csv")
+  Normalised_counts <- read_csv("../data_projectTcell/count_memory_df_vsn.csv")
+  Experimental_design <- read_csv("../support_project/targets_memory.csv")
+} else if (memory == FALSE){
+  #naive
+  x = c("Th0vsResting_naive.csv",
+      "Th1vsResting_naive.csv",
+      "Th2vsResting_naive.csv",
+      "Th17vsResting_naive.csv",
+      "iTregvsResting_naive.csv",
+      "IFNBvsResting_naive.csv")
+  Normalised_counts <- read_csv("../data_projectTcell/count_naive_df_vsn.csv")
+  Experimental_design <- read_csv("../support_project/targets_naive.csv")
+}
+
+TFs_top_all_cond <- list()
+counter = 1
+
+for (i in x) {
+  
+  ## We read the results from the differential analysis. 
+  ttop_filename = paste("ttop", i, sep="_")
+  ttop_filepath = "../results_project/"
+  ttop_ivsResting <- read_csv(paste(ttop_filepath, ttop_filename, sep=""))
+ 
+  # We have to slightly modify the format of the input files to make them suitable
+  # for running **DoRothEA**. 
+
+  Normalised_counts_matrix <- Normalised_counts %>% 
+      dplyr::mutate_if(~ any(is.na(.x)),~ if_else(is.na(.x),0,.x)) %>% 
+      tibble::column_to_rownames(var = "gene") %>% 
+      as.matrix()
+  
+  ttop_ivsResting_matrix <- ttop_ivsResting %>% 
+      dplyr::select(ID, t) %>% 
+      dplyr::filter(!is.na(t)) %>% 
+      column_to_rownames(var = "ID") %>%
+      as.matrix()
+
+  
+  ##now we start with the actual Dorothea part:
+  
+  # We estimate the transcription factor (TF) activity using the DoRothEA R 
+  # package. We select interactions with confidence level A, B and C. 
+  
+  
+  ## We load Dorothea Regulons
+  data(dorothea_hs, package = "dorothea")
+  regulons <- dorothea_hs %>%
+    dplyr::filter(confidence %in% c("A", "B","C"))
+
+
+  # Note that for DoRothEA, we proceed the other way around than for 
+  # PROGENy. We have many TFs, so we cannot clearly visualize all of them in the 
+  # same heatmap. That is why we first compute a TF activity enrichment analysis 
+  # using the statistics from the differential expression analysis. This will allow 
+  # us to select the TFs whose activity varies with the conditions under study. 
+  # 
+  # It is important to set the parameter `eset.filter` to `FALSE`. In this case,
+  # we set the minimum size of regulons to five (`minsize`). I strongly recommend
+  # to check `?viper` to set the parameters that best fit your needs. 
+  
+
+  tf_activities_stat <- dorothea::run_viper(ttop_ivsResting_matrix, regulons,
+      options =  list(minsize = 5, eset.filter = FALSE, 
+      cores = 1, verbose = FALSE, nes = TRUE))
+
+  #for later purposes - all TFs are saved for each condition, later the average top 30 will be determined 
+  tf_activities_stat_topall <- tf_activities_stat %>%
+      as.data.frame() %>% 
+      rownames_to_column(var = "GeneID") %>%
+      dplyr::rename(NES = "t") %>%
+      #dplyr::top_n(50, wt = abs(NES)) %>%
+      dplyr::arrange(NES) %>% 
+      dplyr::mutate(GeneID = factor(GeneID)) 
+  TFs_top_all_cond[[counter]] = tf_activities_stat_topall
+  counter = counter+1
+  
+  #tf_activities_stat_topall is matrix: 
+  #first column: GeneID with names of all TFs
+  #second column: NES of all TFs
+  #important note: NES should be analysed for absolute numbers
+  
+  # The TF activity enrichment results provided by **Viper** are used as an input
+  # in the **CARNIVAL** method. **CARNIVAL** tries to infer the most likely 
+  # upstream signaling events leading to the current TF activity results. 
+  
+  #tf_activities_CARNIVALinput<- tf_activities_stat %>%
+      #as.data.frame() %>% 
+      #tibble::rownames_to_column(var = "TF") 
+
+  #result_filename = paste("TFActivity_CARNIVALinput", i, sep = "_")
+  #result_filepath = "../results_project_test_forloop/"
+
+  #write_csv(tf_activities_CARNIVALinput, paste(result_filepath, result_filename, sep=""))
+} 
+```
+
+## Determining the top TFs 
+
+The top 30 TFs will be found in the following way: 
+A matrix is set up with all TF Activity for all conditions, each row will correspond 
+to a specific TF. The TFs will be ranked for each condition, these ranks will be 
+averaged for all conditions for each TF. From these averaged ranks, the 30 most 
+significant TFs can be found.
+
+```{r determine TFs}
+#create matrix as described by Óscar
+#columns: diff conditions
+#rows: TFs
+#values in matrix: ranks for TF for specific condition
+
+conditions = c("Th0",
+      "Th1",
+      "Th2",
+      "Th17",
+      "iTreg",
+      "IFNB")
+rank_matrix = as.data.frame(matrix())
+
+#first: create rank column per condition; keep absolute values in mind!
+for (i in 1:length(conditions)) {
+  topTFs <- TFs_top_all_cond[[i]] %>%
+      as.data.frame() %>% 
+      #rownames_to_column(var = "GeneID") %>%
+      #dplyr::rename(NES = "t") %>%
+      #dplyr::top_n(35, wt = abs(NES)) %>%
+      dplyr::arrange(abs(NES)) #%>% #desc() should give it in descending order, but this gives error?
+      #dplyr::mutate(GeneID = factor(GeneID)) 
+  
+  rank_column = as.data.frame(matrix(nrow = length(topTFs[,1]), ncol = 2))
+  rank_column[,1] = topTFs[,1]
+  colnames(rank_column) = c("GeneID",conditions[i])
+  for (j in 1:length(topTFs[,1])) {
+    ranknr = (length(topTFs[,1])+1)-j
+    rank_column[j,2] = ranknr
+    
+  }
+  
+  if (i == 1) {
+    rank_matrix = rank_column  
+  }
+  else {
+    rank_matrix = merge(rank_matrix, rank_column, by='GeneID')  
+  }
+}
+
+#second: find average rank for each TF with rowMeans()
+averageranks = rowMeans(rank_matrix[,2:ncol(rank_matrix)])
+rank_matrix[,ncol(rank_matrix)+1] = averageranks
+colnames(rank_matrix)[ncol(rank_matrix)] = "average"
+
+#third: select top n TFs 
+#1: reorder rank_matrix
+rank_matrix_reordered = arrange(rank_matrix, rank_matrix[,8])
+top30TFs_conditions_combined = head(rank_matrix_reordered, n = 30) 
+
+#only thing to do now: 
+#write new .csv file with NES for all TFs for all conditions (see next block)
+
+```
+
+## Saving data in a .csv file format 
+
+The rows of the data in the .csv file correspond to the TFs, the columns to 
+the conditions. 
+
+```{r write files with info}
+#where to find NESs of all conditions: TFs_top_all_cond[[i]]
+conditions = c("Th0",
+      "Th1",
+      "Th2",
+      "Th17",
+      "iTreg",
+      "IFNB")
+
+tf_activities_top30 = top30TFs_conditions_combined[, 1] %>% as.data.frame()
+names(tf_activities_top30)[1] <- "GeneID"
+for (i in 1:length(conditions)) {
+  tf_activities_top30 = merge(tf_activities_top30, TFs_top_all_cond[[i]], by='GeneID')
+  names(tf_activities_top30)[i+1] <- conditions[i]
+}
+
+if (memory == TRUE) {
+  #memory
+  result_filename = paste("TFActivity_CARNIVALinput", "memory", sep = "_")
+} else {
+  #naive
+  result_filename = paste("TFActivity_CARNIVALinput", "naive", sep = "_")
+}
+result_filepath = "../00cleaned_up_files/results_cleaned_up/"
+
+write_csv(tf_activities_top30, paste(result_filepath, result_filename, sep=""))
+
+```
+
+

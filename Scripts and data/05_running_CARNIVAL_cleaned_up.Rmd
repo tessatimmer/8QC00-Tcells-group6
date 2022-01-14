@@ -1,0 +1,250 @@
+---
+title: "05_running_CARNIVAL_cleaned_up"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Intro
+
+Fifth step: running CARNIVAL with the data from steps 3 and 4. 
+
+## Getting Started
+
+Load the required libraries and the support functions.
+
+```{r libraries, message=FALSE}
+library(progeny)
+library(dorothea)
+library(CARNIVAL)
+library(OmnipathR)
+library(readr)
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(visNetwork)
+
+library(ggplot2)
+library(pheatmap)
+
+
+## For the volcano plot (related to support functions)
+library(ggrepel)
+
+## We also load the support functions
+source("assignPROGENyScores.r")
+source("generateTFList.r")
+source("carnival_visNetwork.r")
+```
+
+In addition, read the results from the previous steps: 
+
++ Transcription factor activities (step 4)
++ Pathways activity scores (step 3). 
+
+```{r loadInput, message=FALSE}
+setwd("C:/Users/20192234/Documents/TUe/BMT Y3/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up")
+
+## We read the normalised counts and the experimental design 
+
+memory = FALSE
+
+if (memory == FALSE) {
+  ## naive
+  tf_activities <- read_csv("../results_cleaned_up/TFActivity_CARNIVALinput_naive")
+  PathwayActivity <- read_csv("../results_cleaned_up/PathwayActivity_CARNIVALinput_naive")
+} else {
+  ## memory
+  tf_activities <- read_csv("../results_cleaned_up/TFActivity_CARNIVALinput_memory")
+  PathwayActivity <- read_csv("../results_cleaned_up/PathwayActivity_CARNIVALinput_memory")
+}
+
+```
+
+## Getting the scaffold network from original data
+
+Instead of using OmniPath to get the scaffold network (aka the pkn), we load in 
+a curated network based on papers about T cell networks. 
+
+```{r omnipathSIF, message=FALSE}
+setwd("C:/Users/20192234/Documents/TUe/BMT Y3/8QC00-Tcells/data_projectTcell")
+
+sif <- read.table("../data_projectTcell/curated_network_CARNIVALinput.sif")
+colnames(sif) <- c("source", "interaction", "target")
+
+#save SIF
+write_tsv(sif, "../data_projectTcell/curated_network_CARNIVALinput.tsv")
+
+```
+
+## Transcription Factor and pathway activities for CARNIVAL
+
+We use the supplementary function _generateTFList.r_ to shift the format of 
+tf_activities to the one required by CARNIVAL. The format of 
+PathwayActivity_carnival is also adapted. 
+
+```{r shiftFormats, message=FALSE}
+
+# dorothea for CARNIVAL
+tf_activities_carnival <- data.frame(tf_activities, stringsAsFactors = F, row.names = 1)
+ttf_activities_carnival <- t(tf_activities_carnival)
+#rows: conditions; columns: tfs
+
+#30 TFs are selected:
+tfList = generateTFList(tf_activities_carnival, top=30, access_idx = 1:6)
+#warning: tfList now still contains data for ALL conditions
+
+# progeny for CARNIVAL
+PathwayActivity_carnival <- data.frame(PathwayActivity, stringsAsFactors = F, row.names = 1)
+tPathwayActivity_carnival <- as.data.frame(t(PathwayActivity_carnival))
+#rows: conditions; columns: pathways
+
+conditions = c("Th0",
+      "Th1",
+      "Th2",
+      "Th17",
+      "iTreg",
+      "IFNB")
+
+pxList = split(tPathwayActivity_carnival, conditions)
+
+```
+
+## Running CARNIVAL
+
+CARNIVAL has been developed to find the causal link between the activities of the transcription factors (TFs) and the 'perturbed' nodes.
+We have 3 main inputs that we have to provide:
+
++ _measObj_: The TFs' activities (like the ones we have obtained from DoRothEA)
++ _inputObj_: The 'perturbed' nodes we want that CARNIVAL connects with the activity of TFs. 
+There are 3 ways of using it:
+(1) Give the name and sign of the selected nodes; 
+(2) Give the name only, so the algorithm will select the sign that best fit the models,
+(3) Give _NULL_ as value will create a "Perturbation" node that will try both signs for all 'initial' nodes of the given network ( _netObj_ ).
++ _netObj_: The network that will serve as map to connect the TFs' activities ( _measObj_ ) and the perturbed nodes ( _inputObj_ )
+
+Although it is not required, a fourth object called _weightObj_ can be also given. 
+This object gives values ranged from -1 to 1 for a set of nodes of the network.
+The aim of _weightObj_ is helping the solver to find optimal solutions faster.
+
+```{r prep, message= FALSE}
+#prep for iniciator matrix
+# MC
+iniMTX_distinct_ch = base::data.frame("IL12_EX","IL4_EX", "TGFB_EX", "IL6_EX", "IL23_EX", "IL1B_EX", "IL2_EX", "IFNB_EX", "CD28", "TCR")
+iniciators = base::data.frame(base::matrix(data = 0, nrow = 6, ncol = length(iniMTX_distinct_ch)), stringsAsFactors = F)
+colnames(iniciators) = iniMTX_distinct_ch
+
+#Th0 (but also for all the cell states)
+iniciators["CD28"] <- 1
+iniciators["TCR"] <- 1
+
+#Th1
+iniciators[2,"IL12_EX"] <- 1
+
+#Th2
+iniciators[3, "IL4_EX"] <- 1
+
+#Th17
+iniciators[4, "TGFB_EX"] <- 1
+iniciators[4, "IL6_EX"] <- 1
+iniciators[4, "IL23_EX"] <- 1
+iniciators[4, "IL1B_EX"] <- 1
+
+#Treg
+iniciators[5, "TGFB_EX"] <- 1
+iniciators[5, "IL2_EX"] <- 1
+
+#IFNB
+iniciators[6, "IFNB_EX"] <- 1
+
+```
+
+```{r carnival, message=FALSE}
+#we want to run carnival for all conditions, so we create a forloop:
+#important:
+#iniciators --> perturbed nodes (starting points)
+#tPathwayActivity_carnival --> pathway info (weights)
+#ttf_activities_carnival --> tfs info (ending points)
+#sif --> pkn
+
+if (memory == FALSE) {
+  #naive
+  result_filename = paste("CARNIVAL_result", "naive", sep = "_")
+}else {
+  #memory
+  result_filename = paste("CARNIVAL_result", "memory", sep = "_")
+}
+result_filepath = "../00cleaned_up_files/results_cleaned_up//"
+
+conditions = c("Th0",
+      "Th1",
+      "Th2",
+      "Th17",
+      "iTreg",
+      "IFNB")
+
+for (i in 1:length(conditions)){
+  #get right info
+  cond_ini <- iniciators %>% slice(i:i)
+  
+  if (conditions[i] == "Th0") {
+    cond_TFActivity <- tfList$Th0
+    cond_PathwayActivity <- pxList$Th0
+  } else if (conditions[i] == "Th1") {
+    cond_TFActivity <- tfList$Th1
+    cond_PathwayActivity <- pxList$Th1
+  } else if (conditions[i] == "Th2") {
+    cond_TFActivity <- tfList$Th2
+    cond_PathwayActivity <- pxList$Th2
+  } else if (conditions[i] == "Th17") {
+    cond_TFActivity <- tfList$Th17
+    cond_PathwayActivity <- pxList$Th17
+  } else if (conditions[i] == "iTreg") {
+    cond_TFActivity <- tfList$iTreg
+    cond_PathwayActivity <- pxList$iTreg
+  } else if (conditions[i] == "IFNB") {
+    cond_TFActivity <- tfList$IFNB
+    cond_PathwayActivity <- pxList$IFNB
+  }
+  
+  save_genes <- names(cond_PathwayActivity)
+  cond_PathwayActivity <- as.numeric(cond_PathwayActivity)
+  names(cond_PathwayActivity) <- save_genes
+  
+  #run carnival
+  carnival_result = runCARNIVAL(#changes for every condition (except netObj)
+                                inputObj= cond_ini,
+                                measObj = cond_TFActivity,
+                                netObj = sif,
+                                weightObj = cond_PathwayActivity,
+                               
+                                #keep this the same
+                                solverPath = "C:/Program Files/IBM/ILOG/CPLEX_Studio201/cplex/bin/x64_win64",
+                                solver = "cplex",
+                                timelimit=120,
+                                mipGAP=0,
+                                poolrelGAP=0,
+                                )
+  #save solution 
+  carnival_result$weightedSIF <- data.frame(carnival_result$weightedSIF, stringsAsFactors = F)
+  carnival_result$weightedSIF$Sign <- as.numeric(carnival_result$weightedSIF$Sign)
+  carnival_result$weightedSIF$Weight <- as.numeric(carnival_result$weightedSIF$Weight)
+
+  carnival_result$nodesAttributes <- data.frame(carnival_result$nodesAttributes, stringsAsFactors = F)
+  carnival_result$nodesAttributes$ZeroAct <- as.numeric(carnival_result$nodesAttributes$ZeroAct)
+  carnival_result$nodesAttributes$UpAct <- as.numeric(carnival_result$nodesAttributes$UpAct)
+  carnival_result$nodesAttributes$DownAct <- as.numeric(carnival_result$nodesAttributes$DownAct)
+  carnival_result$nodesAttributes$AvgAct <- as.numeric(carnival_result$nodesAttributes$AvgAct)
+  
+  result_filename_final = paste(result_filename, conditions[i], sep = "_")
+  saveRDS(carnival_result, paste(result_filepath, result_filename_final, sep=""))
+  
+}
+
+
+```
+
+
+

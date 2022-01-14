@@ -1,0 +1,276 @@
+---
+title: "06_analysis_CARNIVAL_results"
+author: "Rosa Hernansaiz-Ballesteros"
+date: "14/08/2020"
+output: 
+  github_document: default
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### License Info
+
+This program is free software: you can redistribute it and/or modify it under 
+the terms of the GNU General Public License as published by the Free Software 
+Foundation, either version 3 of the License, or (at your option) any later 
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY 
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR 
+A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+Please check http://www.gnu.org/licenses/.
+
+## Introduction
+This is the final part of our series of transcriptomics tutorials. In previous parts, we normalised RNASeq data for differential analysis, and used the differential analysis results in **PROGENy** and **DOROTHea**. In the previous tutorial, we demonstrated **CARNIVAL** with TF activities from **DOROTHea**, a prior knowledge network from **Omnipath**, and weights from **PROGENy**.
+
+## CARNIVAL output
+
+CARNIVAL (CAusal Reasoning for Network identification using Integer VALue programming) 
+returns a list with 4 elements: 
+
+* weightedSIF. Character matrix. Contains a summary of _sifAll_, 
+where *Weight* indicates the number of networks that present that interaction.
+
+* nodesAttributes. Character matrix. Contains a summary of _attributesAll_, 
+where all columns ending in *Act* indicate the number of networks that present that node in
+each of the states (Zero = doesn't appear in the network, Up = upregulated, Down = downregulated, Avg = average regulation).
+The column *NodeType* indicates if the node is a TF's (T) or a perturbed one (S).
+
+* sifAll. List of character matrices. All networks that have been calculated.
+
+* attributesAll. List of character matrices.
+
+NOTE: This is valid for current CARNIVAL version (1.0.0)
+
+## CARNIVAL interpretation
+
+The summary files ( _sifAll_ and _attributesAll_ ) can be directly used to identify causal interactions between the 
+perturbed nodes and the selected Transcription Factors. 
+In addition to extracting direct information from the network, 
+we can run different downstream analysis based on the necessities of each project.
+
+Here are described some of the downstream approaches that we have used:
+
++ Pathway enrichment analysis
++ Network comparisons
+
+# Get ready
+
+```{r libraries, message=FALSE}
+library(readr)
+library(piano)
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(scales)
+library(plyr)
+library(GSEABase)
+library(network)
+library(reshape2)
+library(cowplot)
+library(pheatmap)
+library(ggraph)
+library(tidygraph)
+
+# set working directory
+setwd("C:/Users/20182400/Documents/Rstudio OGO git/8QC00-Tcells/scripts_project")
+
+## We also load the support functions
+source("support_enrichment.r")
+source("support_networks.r")
+
+## Read the data
+pkn = read_tsv("../results_project/network_oscar.tsv")
+
+```
+
+# Topological measurments
+
+We can get a sense of the size of the reconstructed networks using topological parameters, such as number of edges and nodes.
+We can also have a look at the network's density and the *degree distribution*.
+The *density* indicates the proportion of interactions that exist in our network when comparing with all possible interactions that can be established. 
+The *degree distribution* shows the number of connections of a node. 
+In a directed network, we can distinguish between incoming and outgoing connections.
+
+NOTE: Here the density is calculated for a _directed graph_.
+As CARNIVAL can report 2 interactions between the same 2 nodes with different sign, 
+these "doubled" interactions are excluded when calculating the density.
+
+For this section, and the following ones, we use the CARNIVAL networks obtained
+when running the _sample_resolution_carnival.R_. 
+
+To find out more about this topic:
+
++ https://mathinsight.org/degree_distribution
++ https://www.networksciencebook.com/chapter/2#degree
+
+```{r netopology, message=FALSE, results='hide', warning=FALSE}
+
+#Get results memory
+carnival_result_Th0_memory <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_memory_Th0.rds")
+carnival_result_Th1_memory <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_memory_Th1.rds")
+carnival_result_Th2_memory <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_memory_Th2.rds")
+carnival_result_Th17_memory <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_memory_Th17.rds")
+carnival_result_IFNB_memory <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_memory_IFNB.rds")
+carnival_result_iTreg_memory <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_memory_iTreg.rds")
+#Add together memory
+carnival_results_list_memory <- list(Th0_memory = carnival_result_Th0_memory,Th1_memory = carnival_result_Th1_memory, Th2_memory = carnival_result_Th2_memory, Th17_memory = carnival_result_Th17_memory, IFNB_memory = carnival_result_IFNB_memory, iTreg_memory = carnival_result_iTreg_memory)
+
+#Get results naive
+carnival_result_Th0_naive <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_naive_Th0.rds")
+carnival_result_Th1_naive <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_naive_Th1.rds")
+carnival_result_Th2_naive <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_naive_Th2.rds")
+carnival_result_Th17_naive <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_naive_Th17.rds")
+carnival_result_IFNB_naive <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_naive_IFNB.rds")
+carnival_result_iTreg_naive <- readRDS("~/Rstudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/CARNIVAL_result_naive_iTreg.rds")
+#Add together naive
+carnival_results_list_naive <- list(Th0_naive = carnival_result_Th0_naive,Th1_naive = carnival_result_Th1_naive, Th2_naive = carnival_result_Th2_naive, Th17_naive = carnival_result_Th17_naive, IFNB_naive = carnival_result_IFNB_naive, iTreg_naive = carnival_result_iTreg_naive)
+
+# get only summary files from CARNIVAL results
+sifts = lapply(carnival_results_list_memory, function(x){x$weightedSIF}) 
+nodos = lapply(carnival_results_list_memory, function(x){x$nodesAttributes})
+
+sifts1 = lapply(carnival_results_list_naive, function(x){x$weightedSIF}) 
+nodos1 = lapply(carnival_results_list_naive, function(x){x$nodesAttributes})
+
+# Calculate the number of edges and nodes in the networks and its density
+node_edge = do.call(rbind,lapply(sifts, count_edges_nodes_degree))
+node_edge1 = do.call(rbind,lapply(sifts1, count_edges_nodes_degree))
+
+# Calculate degree distribution for a sample
+count_degree = sifts$IFNB_memory %>% degree_count 
+count_degree1 = sifts1$IFNB_naive %>% degree_count
+
+#visualise
+ggdat = as.data.frame(node_edge) %>% tibble::rownames_to_column(var = "sample") %>%
+  dplyr::mutate(condition = gsub(".Rep[0-9]{1}", "", sample))
+ggdat1 = as.data.frame(node_edge1) %>% tibble::rownames_to_column(var = "sample") %>%
+  dplyr::mutate(condition = gsub(".Rep[0-9]{1}", "", sample))
+
+ggdat_total <- rbind(ggdat, ggdat1)
+
+#Plotting
+nodes <- ggdat_total[,"nodes"]
+edges <- ggdat_total[,"edges"]
+
+# relation between number of edges and nodes
+ggplot(ggdat_total, aes(x = nodes, y = edges, color = as.factor(condition))) +
+  geom_point() +
+  xlim(0 , 25) +
+  ylim(0 , 25) +
+  geom_text(label = ggdat_total$sample, 
+            check_overlap = TRUE,
+            vjust = 0, 
+            nudge_y = 0.5,
+            show.legend = F,
+            mapping = NULL,
+            size = 3.5) +
+  theme_bw(base_size = 14) +
+  guides(color = guide_legend( title="Conditions" ) ) +
+  ggtitle("Node-edge composition")
+
+ggsave("00cleaned_up_files/results_cleaned_up/node_edge_composition.pdf")
+
+
+#network degree
+ggplot(ggdat_total, aes(x = density, y = sample,fill = as.factor(condition))) + 
+  geom_point() +
+  geom_text(
+    aes(label = sprintf("%0.3f", density)), 
+    position = position_dodge(width = 1),
+    inherit.aes = TRUE,
+    hjust = -0.1, size = 4,
+    ) +
+  xlim(0 , 0.15) +
+  geom_col() +
+  theme_bw(base_size = 14) +
+  guides(fill = "none" ) + 
+  ggtitle("Network degree")
+
+ggsave("00cleaned_up_files/results_cleaned_up/network_degree.pdf")
+```
+
+
+Generally speaking, biological networks are not dense, so don't worry if the density values are low... they usually are!
+
+The degree distribution is an interesting graphic to look at, as we can get some immediate information:
+
++ k = 0 for in-degree indicates the proportion of initial nodes, 
+while for out-degree indicates the effectors (here the TFs). 
+For total-degree, that would indicate the presence of isolated nodes.
+
++ Most of the nodes do not have many connections (e.g. k = 1 -> p = 0.6), 
+but there are a few that are highly connected (e.g. k > 6).
+
++ We can find some hubs when k is higher (plot B). The out-degree ends at k = 5; 
+this means that the biggest regulatory-hub regulates at most 5 other nodes.
+In a similar way, the in-degree goes up to k = 9;
+This means that there are few hubs (k > 5) that are regulated by at most 9 nodes.
+
+# Network comparison
+
+When we have more than one network, we usually would like to know how (dis)similar these networks are.
+
+We can use the *Jaccard Index* to measure similarities and diversity
+between sample sets (https://en.wikipedia.org/wiki/Jaccard_index).Int 
+This index can be used in different scenarios.
+Generally, it's used with the nodes, but we can also use it with the edges.
+
+When we have groups, in our case WT and FOXA2KO, we can also extract the interactions that are common.
+
+```{r netcompare, message=FALSE, results='hide', warning=FALSE}
+
+# create a matrix of all interactions for all samples
+interactions = getTopology(networks = sifts, scafoldNET = pkn)
+interactions1 = getTopology(networks = sifts1, scafoldNET = pkn)
+
+# get the edges per sample
+net_int = apply(interactions, 2, function(x, r){
+  r[which(!is.na(x))]
+}, rownames(interactions))
+net_int1 = apply(interactions1, 2, function(x, r){
+  r[which(!is.na(x))]
+}, rownames(interactions1))
+
+# calculate Jaccard indexes per pair
+combined = expand.grid(1:length(names(sifts)), 1:length(names(sifts1)))
+jac_index = matrix(data = NA, nrow = length(names(sifts)), ncol = length(names(sifts1)),
+                   dimnames = list(names(sifts), names(sifts1)))
+
+for (i in 1:nrow(combined)){
+  n = names(sifts)[combined[i,1]]
+  m = names(sifts1)[combined[i,2]]
+  jac_index[n,m] = length( intersect(net_int[[n]], net_int1[[m]]) ) / length( union(net_int[[n]], net_int1[[m]]) )
+}
+
+#Visualize the indices in a heatmap
+
+#saving method
+save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+
+heatmap_ji <- pheatmap(jac_index,fontsize=14, 
+           fontsize_row = 11, fontsize_col = 11, 
+           angle_col = 45, treeheight_col = 0, cellheight = 40, cellwidth = 50,
+           main = "Jaccard indices")
+
+save_pheatmap_pdf(heatmap_ji, "C:/Users/20182400/Documents/RStudio OGO git/8QC00-Tcells/scripts_project/00cleaned_up_files/results_cleaned_up/jaccard_index.pdf")
+
+```
+
+## Session Info Details
+
+```{r sessionInfo, echo=FALSE, eval=TRUE}
+sessionInfo()
+```
